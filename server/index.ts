@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs";
-import { createApp } from "./app";
+import { createApp } from "./app.js";
 
 // Local entrypoint: one command serves UI + API (npm run dev / npm start).
 // On Vercel this file is unused - api/index.ts is the entry instead.
@@ -19,7 +19,7 @@ async function main() {
     }
   } else {
     const { createServer } = await import("http");
-    const { setupVite } = await import("./vite");
+    const { setupVite } = await import("./vite.js");
     const server = createServer(app);
     await setupVite(app, server);
     const port = Number(process.env.PORT || 5000);
