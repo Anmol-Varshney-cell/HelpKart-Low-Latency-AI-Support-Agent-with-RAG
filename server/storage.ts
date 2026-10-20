@@ -1,5 +1,5 @@
 import { eq, and, or, ilike, desc, gte, sql } from "drizzle-orm";
-import { db } from "./db";
+import { db } from "./db.js";
 import {
   conversations,
   messages,
@@ -12,7 +12,7 @@ import {
   type InsertMessage,
   type MessageAudio,
   visitors,
-} from "../shared/schema";
+} from "../shared/schema.js";
 
 export interface IStorage {
   // Conversations
