@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { insertConversationSchema } from "./schema";
+import { insertConversationSchema } from "./schema.js";
 
 // Single source of truth for the API contract
 export const api = {
