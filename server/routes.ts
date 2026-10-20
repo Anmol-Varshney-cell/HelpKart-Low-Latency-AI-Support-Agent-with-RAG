@@ -1,11 +1,11 @@
 import type { Express, Request, Response } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
-import { seedDatabase } from "./seed";
-import { ai, CHAT_MODEL_CHAIN } from "./gemini";
-import { getVoiceConfig, getSubscription, textToSpeech } from "./elevenlabs";
-import { api, buildPath } from "../shared/routes";
-import { visitorIdOf } from "./app";
+import { storage } from "./storage.js";
+import { seedDatabase } from "./seed.js";
+import { ai, CHAT_MODEL_CHAIN } from "./gemini.js";
+import { getVoiceConfig, getSubscription, textToSpeech } from "./elevenlabs.js";
+import { api, buildPath } from "../shared/routes.js";
+import { visitorIdOf } from "./app.js";
 
 function sseSend(res: Response, payload: Record<string, unknown>): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
