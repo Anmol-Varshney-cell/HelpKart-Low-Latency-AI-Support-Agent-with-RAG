@@ -85,7 +85,7 @@ def _owned_conversation(conversation_id):
 
 @app.get("/")
 def home():
-    return send_file("static/index.html")
+    return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"))
 
 
 @app.get("/api/health")
