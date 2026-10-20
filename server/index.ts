@@ -1,31 +1,36 @@
-import express from "express";
-import { createServer } from "http";
 import path from "path";
 import fs from "fs";
-import { registerRoutes } from "./routes";
+import { createApp } from "./app";
 
-const app = express();
-app.use(express.json({ limit: "10mb" }));
+// Local entrypoint: one command serves UI + API (npm run dev / npm start).
+// On Vercel this file is unused - api/index.ts is the entry instead.
 
-const server = createServer(app);
 const isProd = process.env.NODE_ENV === "production";
 
 async function main() {
-  await registerRoutes(server, app);
+  const app = await createApp();
 
   if (isProd) {
     const dist = path.resolve(process.cwd(), "dist", "public");
     if (fs.existsSync(dist)) {
+      const { default: express } = await import("express");
       app.use(express.static(dist));
       app.use((_req, res) => res.sendFile(path.join(dist, "index.html")));
     }
   } else {
+    const { createServer } = await import("http");
     const { setupVite } = await import("./vite");
+    const server = createServer(app);
     await setupVite(app, server);
+    const port = Number(process.env.PORT || 5000);
+    server.listen(port, () => {
+      console.log(`HelpKart dev server on http://localhost:${port}`);
+    });
+    return;
   }
 
   const port = Number(process.env.PORT || 5000);
-  server.listen(port, () => {
+  app.listen(port, () => {
     console.log(`HelpKart server listening on http://localhost:${port}`);
   });
 }
