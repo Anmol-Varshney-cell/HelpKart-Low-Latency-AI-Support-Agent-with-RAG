@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HelpKart Support</title>
+<style>
+  :root { --bg:#f7f5f0; --panel:#ffffff; --accent:#5b4bc4; --text:#1f1c2e; --muted:#8a8798; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:Georgia,'Segoe UI',serif; background:var(--bg); color:var(--text); height:100vh; display:flex; }
+  aside { width:260px; min-width:260px; background:#efece6; border-right:1px solid #e0dcd2; display:flex; flex-direction:column; }
+  aside header { padding:18px; font-size:20px; font-weight:bold; display:flex; align-items:center; gap:8px; }
+  aside header .logo { width:30px; height:30px; border-radius:9px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-size:16px; }
+  #new-chat { margin:0 14px 12px; padding:10px; border:none; border-radius:10px; background:var(--accent); color:#fff; font-size:14px; cursor:pointer; }
+  #conv-list { flex:1; overflow-y:auto; padding:0 8px; }
+  .conv { display:flex; align-items:center; gap:8px; padding:9px 10px; border-radius:9px; cursor:pointer; font-size:14px; }
+  .conv:hover { background:#e5e1d6; }
+  .conv.active { background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .conv span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .conv button { border:none; background:none; color:var(--muted); cursor:pointer; font-size:14px; }
+  aside footer { padding:10px 14px; font-size:12px; color:var(--muted); border-top:1px solid #e0dcd2; cursor:pointer; }
+  main { flex:1; display:flex; flex-direction:column; }
+  #chat { flex:1; overflow-y:auto; padding:24px 8vw; display:flex; flex-direction:column; gap:14px; }
+  .msg { max-width:80%; padding:12px 16px; border-radius:16px; font-size:15px; line-height:1.5; white-space:pre-wrap; word-wrap:break-word; }
+  .msg.user { align-self:flex-end; background:var(--accent); color:#fff; }
+  .msg.assistant { align-self:flex-start; background:var(--panel); border:1px solid #e6e2d8; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+  .msg.failed-note { align-self:flex-end; background:none; color:#b3382e; font-size:12px; padding:0 16px; }
+  .msg.error { align-self:flex-start; background:#fdf0ef; border:1px solid #f0c8c4; color:#b3382e; }
+  #welcome { margin:auto; text-align:center; color:var(--muted); }
+  #welcome h2 { color:var(--text); margin-bottom:8px; }
+  #composer { padding:14px 8vw 20px; display:flex; gap:10px; }
+  #input { flex:1; padding:13px 16px; border:1px solid #ddd8cc; border-radius:14px; font-size:15px; font-family:inherit; background:#fff; }
+  #input:focus { outline:2px solid var(--accent); border-color:transparent; }
+  #send { padding:0 22px; border:none; border-radius:14px; background:var(--accent); color:#fff; font-size:15px; cursor:pointer; }
+  #send:disabled { opacity:.5; cursor:default; }
+  #kb-modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); align-items:center; justify-content:center; }
+  #kb-modal.open { display:flex; }
+  #kb-box { background:#fff; border-radius:14px; max-width:640px; width:90%; max-height:80vh; overflow-y:auto; padding:22px; }
+  #kb-box h3 { margin-bottom:12px; }
+  .kb-item { margin-bottom:14px; font-size:14px; }
+  .kb-item b { display:block; margin-bottom:3px; }
+  #kb-close { float:right; border:none; background:none; font-size:18px; cursor:pointer; color:var(--muted); }
+  @media (max-width:720px){ aside{position:fixed;z-index:10;height:100%;transform:translateX(-100%);transition:transform .2s;} aside.open{transform:none;} #menu{display:block!important;} #chat,#composer{padding-left:5vw;padding-right:5vw;} }
+  #menu { display:none; margin:10px; border:1px solid #ddd8cc; background:#fff; border-radius:9px; padding:6px 12px; cursor:pointer; }
+</style>
+</head>
+<body>
+<button id="menu">&#9776; Chats</button>
+<aside id="sidebar">
+  <header><div class="logo">H</div> HelpKart</header>
+  <button id="new-chat">+ New chat</button>
+  <div id="conv-list"></div>
+  <footer id="kb-open">View knowledge base</footer>
+</aside>
+<main>
+  <div id="chat"></div>
+  <div id="composer">
+    <input id="input" placeholder="Ask about returns, shipping, orders..." autocomplete="off">
+    <button id="send">Send</button>
+  </div>
+</main>
+<div id="kb-modal"><div id="kb-box"><button id="kb-close">&times;</button><h3>Knowledge base</h3><div id="kb-items"></div></div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+let currentId = null;
+let streaming = false;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.message) || ("Request failed: " + res.status));
+  return data;
+}
+
+async function loadConversations(selectId) {
+  const convos = await api("/api/conversations");
+  const list = $("conv-list");
+  list.innerHTML = "";
+  for (const c of convos) {
+    const row = document.createElement("div");
+    row.className = "conv" + (c.id === currentId ? " active" : "");
+    const label = document.createElement("span");
+    label.textContent = c.title || ("Conversation " + c.id);
+    const del = document.createElement("button");
+    del.textContent = "\u{1F5D1}";
+    del.title = "Delete";
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      await api("/api/conversations/" + c.id, { method: "DELETE" });
+      if (currentId === c.id) { currentId = null; renderEmpty(); }
+      loadConversations();
+    };
+    row.append(label, del);
+    row.onclick = () => openConversation(c.id);
+    list.appendChild(row);
+  }
+  if (selectId) openConversation(selectId);
+  else if (!currentId && convos.length) openConversation(convos[0].id);
+  else if (!convos.length) renderEmpty();
+}
+
+function renderEmpty() {
+  $("chat").innerHTML = '<div id="welcome"><h2>HelpKart Support</h2><p>Start a new chat and ask about orders, returns, shipping and payments.</p></div>';
+}
+
+function bubble(role, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.textContent = text;
+  $("chat").appendChild(div);
+  $("chat").scrollTop = $("chat").scrollHeight;
+  return div;
+}
+
+async function openConversation(id) {
+  currentId = id;
+  $("sidebar").classList.remove("open");
+  document.querySelectorAll(".conv").forEach(el => el.classList.remove("active"));
+  const convo = await api("/api/conversations/" + id);
+  $("chat").innerHTML = "";
+  for (const m of convo.messages) {
+    bubble(m.role === "user" ? "user" : "assistant", m.content);
+    if (m.role === "user" && m.status === "failed")
+      bubble("failed-note", "not answered - does not count toward the daily limit");
+  }
+  loadConvActive();
+}
+
+function loadConvActive() {
+  document.querySelectorAll(".conv").forEach(el => {
+    const isActive = el.querySelector("span") && currentId !== null;
+    el.classList.remove("active");
+  });
+  loadConversations();  // refresh highlight cheaply
+}
+
+async function ensureConversation() {
+  if (currentId) return currentId;
+  const convo = await api("/api/conversations", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "New Conversation" })
+  });
+  currentId = convo.id;
+  $("chat").innerHTML = "";
+  return currentId;
+}
+
+async function send() {
+  const input = $("input");
+  const text = input.value.trim();
+  if (!text || streaming) return;
+  streaming = true;
+  $("send").disabled = true;
+  input.value = "";
+  try {
+    const id = await ensureConversation();
+    bubble("user", text);
+    const replyBox = bubble("assistant", "");
+    const res = await fetch(`/api/conversations/${id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "", answer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop();
+      for (const part of parts) {
+        if (!part.startsWith("data: ")) continue;
+        const evt = JSON.parse(part.slice(6));
+        if (evt.type === "transcript") { answer += evt.data; replyBox.textContent = answer; }
+        else if (evt.type === "error") { replyBox.remove(); bubble("error", evt.error); }
+        $("chat").scrollTop = $("chat").scrollHeight;
+      }
+    }
+    if (!answer && document.contains(replyBox) && !replyBox.textContent) replyBox.remove();
+  } catch (err) {
+    bubble("error", err.message || "Something went wrong. Please try again.");
+  } finally {
+    streaming = false;
+    $("send").disabled = false;
+    loadConversations();
+  }
+}
+
+$("send").onclick = send;
+$("input").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+$("new-chat").onclick = async () => {
+  const convo = await api("/api/conversations", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "New Conversation" })
+  });
+  currentId = convo.id;
+  $("chat").innerHTML = "";
+  loadConversations();
+};
+$("menu").onclick = () => $("sidebar").classList.toggle("open");
+$("kb-open").onclick = async () => {
+  const items = await api("/api/knowledge-base");
+  $("kb-items").innerHTML = items.map(k => `<div class="kb-item"><b></b><span></span></div>`).join("");
+  document.querySelectorAll(".kb-item").forEach((el, i) => {
+    el.querySelector("b").textContent = items[i].title;
+    el.querySelector("span").textContent = items[i].content;
+  });
+  $("kb-modal").classList.add("open");
+};
+$("kb-close").onclick = () => $("kb-modal").classList.remove("open");
+$("kb-modal").onclick = (e) => { if (e.target.id === "kb-modal") $("kb-modal").classList.remove("open"); };
+
+loadConversations();
+</script>
+</body>
+</html>
