@@ -4,7 +4,7 @@
 
 This is a complete implementation of a low-latency AI customer support agent for HelpKart that demonstrates:
 
-- **Conversational AI** using OpenAI's gpt-audio models via Replit AI Integrations
+- **Conversational AI** - API is taken from Google and Eleven Labs
 - **Retrieval-Augmented Generation (RAG)** with PostgreSQL knowledge base search
 - **Real-time Streaming** using Server-Sent Events (SSE) for immediate response display
 - **Low-latency Architecture** optimized for rapid turn-by-turn interactions
@@ -95,18 +95,6 @@ data: {"type":"error","error":"..."}                // Error handling
   ├── db.ts                    # Database connection
   ├── storage.ts               # Storage layer interface
   ├── routes.ts                # Express route handlers
-  ├── replit_integrations/
-  │   ├── audio/
-  │   │   ├── client.ts        # OpenAI voice functions
-  │   │   ├── routes.ts        # Audio API routes
-  │   │   └── index.ts         # Exports
-  │   ├── chat/
-  │   │   ├── routes.ts        # Chat API routes
-  │   │   ├── storage.ts       # Chat storage interface
-  │   │   └── index.ts
-  │   └── batch/
-  │       ├── utils.ts         # Batch processing with rate limiting
-  │       └── index.ts
 
 /client/src
   ├── pages/
@@ -569,5 +557,4 @@ User: "What's your return policy?"
 - [ ] Customer sentiment analysis
 - [ ] Multi-language support
 - [ ] Admin dashboard for KB management
-
 
