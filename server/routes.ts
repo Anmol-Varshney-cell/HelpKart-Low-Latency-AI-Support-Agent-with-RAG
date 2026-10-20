@@ -5,6 +5,7 @@ import { seedDatabase } from "./seed";
 import { ai, CHAT_MODEL_CHAIN } from "./gemini";
 import { getVoiceConfig, getSubscription, textToSpeech } from "./elevenlabs";
 import { api, buildPath } from "../shared/routes";
+import { visitorIdOf } from "./app";
 
 function sseSend(res: Response, payload: Record<string, unknown>): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -15,8 +16,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   await seedDatabase();
 
   // List all conversations
-  app.get(api.conversations.list.path, async (_req, res) => {
-    const convos = await storage.getConversations();
+  app.get(api.conversations.list.path, async (req, res) => {
+    const convos = await storage.getConversations(visitorIdOf(req));
     res.json(convos);
   });
 
@@ -24,7 +25,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get(api.conversations.get.path, async (req, res) => {
     const id = Number(req.params.id);
     const convo = await storage.getConversation(id);
-    if (!convo) return res.status(404).json({ message: "Not found" });
+    if (!convo || convo.visitorId !== visitorIdOf(req)) {
+      return res.status(404).json({ message: "Not found" });
+    }
     const msgs = await storage.getMessages(id);
     res.json({ ...convo, messages: msgs });
   });
@@ -32,13 +35,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Create new conversation
   app.post(api.conversations.create.path, async (req, res) => {
     const input = api.conversations.create.input.parse(req.body);
-    const convo = await storage.createConversation(input);
+    const convo = await storage.createConversation({ ...input, visitorId: visitorIdOf(req) });
     res.status(201).json(convo);
   });
 
   // Delete conversation
   app.delete(api.conversations.delete.path, async (req, res) => {
     const id = Number(req.params.id);
+    const convo = await storage.getConversation(id);
+    if (!convo || convo.visitorId !== visitorIdOf(req)) return res.status(404).json({ message: "Not found" });
     await storage.deleteConversation(id);
     res.status(204).end();
   });
@@ -59,28 +64,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { text } = parsed.data;
 
     const convo = await storage.getConversation(conversationId);
-    if (!convo) return res.status(404).json({ message: "Conversation not found" });
+    if (!convo || convo.visitorId !== visitorIdOf(req)) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
 
+    // Honest accounting (hoisted so catch can reach it): a question that
+    // never gets an assistant answer is marked 'failed' - it stays visible in
+    // the visitor's history but never counts against the daily cap, and a
+    // later retry of the same text reuses the same record (no duplicate).
+    let exchangeUserMessageId: number | null = null;
+    const markExchangeFailed = async () => {
+      if (exchangeUserMessageId !== null) {
+        const id = exchangeUserMessageId;
+        exchangeUserMessageId = null;
+        try { await storage.setMessageStatus(id, "failed"); } catch {}
+      }
+    };
+
     try {
       // 1. RAG retrieval - inject knowledge base context
       const relevantKb = await storage.searchKnowledgeBase(text);
       const kbContext = relevantKb.map((k) => `${k.title}: ${k.content}`).join("\n");
 
-      // 2. Save user message - but idempotently: if the newest message in this
-      // conversation is the SAME unanswered user text (page was refreshed mid-reply
-      // or the last attempt failed and the user retried), do not store a duplicate.
-      // The retry simply answers the question that is already on record.
-      const prior = await storage.getMessages(conversationId);
-      const last = prior[prior.length - 1];
-      const isRetryOfUnanswered = last && last.role === "user" && last.content === text;
-      if (!isRetryOfUnanswered) {
-        await storage.createMessage({ conversationId, role: "user", content: text });
+      // 2. Admit the question atomically (per-visitor advisory lock in the
+      // shared database): concurrent invocations can't both pass the cap,
+      // retries reuse the same record, rejected questions stay visible as
+      // 'failed' and never consume quota.
+      const cap = Number(process.env.DEMO_DAILY_QUESTION_CAP || 30);
+      const nowMs = Date.now();
+      const admission = await storage.admitQuestion({
+        visitorId: visitorIdOf(req),
+        conversationId,
+        text,
+        cap,
+        windowSince: new Date(nowMs - 24 * 60 * 60 * 1000),
+        pendingSince: new Date(nowMs - 10 * 60 * 1000),
+      });
+      if (admission.outcome === "cap_reached") {
+        await markExchangeFailed(); // no-op safety; record already 'failed'
+        sseSend(res, {
+          type: "error",
+          error: `Daily demo limit reached (${cap} questions per visitor). Please try again tomorrow.`,
+        });
+        return res.end();
       }
+      if (admission.outcome === "in_flight") {
+        exchangeUserMessageId = null; // owned by the in-flight invocation
+        sseSend(res, {
+          type: "error",
+          error: "This question is already being answered - please wait a moment.",
+        });
+        return res.end();
+      }
+      const userMessageId = admission.messageId;
+      exchangeUserMessageId = userMessageId;
+
       sseSend(res, { type: "user_transcript", data: text });
 
       // 3. Conversation history
@@ -102,6 +145,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         `Knowledge base:\n${kbContext || "(no matching entries found)"}`;
 
       if (!ai) {
+        await markExchangeFailed();
         sseSend(res, {
           type: "error",
           error:
@@ -170,6 +214,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!stream) {
         const status = (setupErr as { status?: number })?.status;
         console.error("[messages] stream setup failed:", setupErr);
+        await markExchangeFailed();
         sseSend(res, {
           type: "error",
           error:
@@ -203,11 +248,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         role: "assistant",
         content: assistantTranscript,
       });
+      await storage.setMessageStatus(userMessageId, "answered");
+      exchangeUserMessageId = null;
 
       sseSend(res, { type: "done", transcript: assistantTranscript });
       res.end();
     } catch (err) {
       console.error("[messages] stream error:", err);
+      try { await markExchangeFailed(); } catch {}
       sseSend(res, {
         type: "error",
         error: err instanceof Error ? err.message : "Unknown error while generating reply",
@@ -235,6 +283,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const messageId = Number(req.params.id);
     const msg = await storage.getMessage(messageId);
+    if (msg) {
+      const owner = await storage.getConversation(msg.conversationId);
+      if (!owner || owner.visitorId !== visitorIdOf(req)) {
+        return res.status(404).json({ message: "Not found" });
+      }
+    }
     if (!msg || msg.role !== "assistant") {
       return res.status(404).json({ message: "Assistant message not found" });
     }
