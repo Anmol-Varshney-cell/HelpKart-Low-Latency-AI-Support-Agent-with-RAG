@@ -48,7 +48,7 @@ User Message → Search knowledge_base (ILIKE query) → Top 3 results
 **Transport: Server-Sent Events (SSE)**
 - **Why SSE over WebSocket?** - Simpler HTTP protocol, better fallback support, lower overhead for text streaming
 - **How it works:**
-  1. Frontend sends text/audio to `/api/conversations/:id/messages`
+  1. Frontend sends text to `/api/conversations/:id/messages`
   2. Backend streams responses as SSE events
   3. Client accumulates chunks in real-time
   4. Auto-saves complete message after stream ends
@@ -57,7 +57,6 @@ User Message → Search knowledge_base (ILIKE query) → Top 3 results
 ```
 data: {"type":"user_transcript","data":"..."}      // Echoes user input
 data: {"type":"transcript","data":"..."}            // AI response chunks
-data: {"type":"audio","data":"..."}                 // PCM16 audio (base64)
 data: {"type":"done","transcript":"..."}            // Final message saved
 data: {"type":"error","error":"..."}                // Error handling
 ```
@@ -84,7 +83,6 @@ data: {"type":"error","error":"..."}                // Error handling
 | API Routes | Use route definitions (single source of truth) | Eliminates bugs |
 | Frontend Streaming | SSE + immediate UI updates | -100ms perceived |
 | Database | Indexed integer PKs, simple schema | -10ms queries |
-| Audio Processing | Auto-detect format, convert as needed | Handles all browsers |
 
 ---
 
@@ -228,10 +226,10 @@ export async function registerRoutes(
     res.status(201).json(convo);
   });
 
-  // Stream text/audio messages - CORE ENDPOINT
-  app.post("/api/conversations/:id/messages", audioBodyParser, async (req, res) => {
+  // Stream chat messages - CORE ENDPOINT
+  app.post("/api/conversations/:id/messages", async (req, res) => {
     const conversationId = parseInt(req.params.id);
-    const { text, voice = "alloy" } = req.body;
+    const { text } = req.body;
 
     // 1. RAG Retrieval - inject knowledge base context
     const relevantKb = await storage.searchKnowledgeBase(text);
@@ -259,23 +257,22 @@ ${kbContext}`;
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
 
-    const stream = await openai.chat.completions.create({
-      model: "gpt-audio",
-      modalities: ["text", "audio"],
-      audio: { voice, format: "pcm16" },
-      messages: [{ role: "system", content: systemPrompt }, ...chatHistory],
-      stream: true,
+    // Walk the free-tier fallback chain: one retry per model, then the next.
+    const stream = await ai.models.generateContentStream({
+      model: CHAT_MODEL_CHAIN[0],
+      contents: chatHistory,
+      config: { systemInstruction: systemPrompt },
     });
 
     let assistantTranscript = "";
 
     for await (const chunk of stream) {
-      const delta = chunk.choices?.[0]?.delta as any;
-      if (delta?.audio?.transcript) {
-        assistantTranscript += delta.audio.transcript;
+      const part = chunk.text;
+      if (part) {
+        assistantTranscript += part;
         res.write(`data: ${JSON.stringify({ 
           type: "transcript", 
-          data: delta.audio.transcript 
+          data: part 
         })}\n\n`);
       }
     }
@@ -514,18 +511,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 |-----------|---------|-------|
 | Send message → Display user text | <10ms | Optimistic UI |
 | RAG search (knowledge base) | 5-15ms | Simple ILIKE query |
-| AI response first token | 200-400ms | OpenAI streaming start |
+| AI response first token | 200-400ms | AI streaming start |
 | Accumulate response | 20-40ms per token | 50 tokens ≈ 1-2s |
 | Persist to database | 10-20ms | Happens after streaming |
 | **Total perceived latency** | **200-500ms** | First token to display |
 
-**Key optimization: SSE streaming** allows the UI to display tokens as they arrive from OpenAI, rather than waiting for the full response.
+**Key optimization: SSE streaming** allows the UI to display tokens as they arrive from the AI API, rather than waiting for the full response.
 
 ---
 
 ## Assignment Completeness
 
-✅ **Conversational AI Systems** - OpenAI gpt-audio model integrated
+✅ **Conversational AI Systems** - AI chat model integrated via API
 ✅ **RAG Implementation** - Knowledge base search with context injection
 ✅ **PostgreSQL Database** - Normalized schema with proper indexing
 ✅ **Streaming API** - Server-Sent Events for real-time responses
