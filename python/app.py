@@ -190,9 +190,9 @@ def stream_message(conversation_id):
 
             if gemini_client.client is None:
                 mark_failed()
+                app.logger.error("GEMINI_API_KEY is not configured on the server; question not answered.")
                 yield sse({"type": "error",
-                           "error": "GEMINI_API_KEY is not configured on the server. Add a free key "
-                                    "from https://aistudio.google.com/apikey and restart."})
+                           "error": "The assistant is temporarily unavailable. Please try again later."})
                 return
 
             # 4. Open the stream, walking the free-tier fallback chain. A
@@ -202,11 +202,12 @@ def stream_message(conversation_id):
                 stream, _used_model = gemini_client.open_chat_stream(history, system_prompt)
             except Exception as err:
                 mark_failed()
+                app.logger.error("Gemini stream failed to open: %s", err)
                 if gemini_client._status_of(err) in gemini_client.RETRYABLE_CODES:
                     msg = ("The AI service is temporarily busy (high demand on the free tier). "
                            "Please try again in a minute.")
                 else:
-                    msg = str(err) or "Unknown error while generating reply"
+                    msg = "The assistant is temporarily unavailable. Please try again later."
                 yield sse({"type": "error", "error": msg})
                 return
 
@@ -225,7 +226,9 @@ def stream_message(conversation_id):
             yield sse({"type": "done", "transcript": assistant_text})
         except Exception as err:
             mark_failed()
-            yield sse({"type": "error", "error": str(err) or "Unknown error while generating reply"})
+            app.logger.exception("Chat stream failed: %s", err)
+            yield sse({"type": "error",
+                       "error": "Something went wrong while answering. Please try again."})
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
