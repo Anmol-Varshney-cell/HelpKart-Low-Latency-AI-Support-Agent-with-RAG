@@ -1,4 +1,4 @@
-import * as schema from "../shared/schema";
+import * as schema from "../shared/schema.js";
 
 // Two ways to run the database:
 //
