@@ -163,22 +163,42 @@ async function send() {
     });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "", answer = "";
+    let buffer = "", answer = "", handled = false;
+    // Watchdog: if the stream goes silent (e.g. the server function is killed
+    // mid-answer), stop waiting and show an honest retry state instead of a
+    // spinner that never clears.
+    const WATCHDOG_MS = 50000;
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      let timer;
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("watchdog")), WATCHDOG_MS); })
+      ]).catch((e) => {
+        if (e.message === "watchdog") { reader.cancel().catch(() => {}); return null; }
+        throw e;
+      });
+      clearTimeout(timer);
+      if (chunk === null) {
+        replyBox.remove(); handled = true;
+        bubble("error", "The assistant is taking too long to respond. Please try again.");
+        break;
+      }
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
       const parts = buffer.split("\n\n");
       buffer = parts.pop();
       for (const part of parts) {
         if (!part.startsWith("data: ")) continue;
         const evt = JSON.parse(part.slice(6));
         if (evt.type === "transcript") { answer += evt.data; replyBox.textContent = answer; }
-        else if (evt.type === "error") { replyBox.remove(); bubble("error", evt.error); }
+        else if (evt.type === "error") { replyBox.remove(); bubble("error", evt.error); handled = true; }
         $("chat").scrollTop = $("chat").scrollHeight;
       }
     }
-    if (!answer && document.contains(replyBox) && !replyBox.textContent) replyBox.remove();
+    if (!answer && !handled && document.contains(replyBox) && !replyBox.textContent) {
+      replyBox.remove();
+      bubble("error", "The assistant did not respond. Please try again.");
+    }
   } catch (err) {
     bubble("error", err.message || "Something went wrong. Please try again.");
   } finally {
