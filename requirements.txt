@@ -1,2 +1,4 @@
--r python/requirements.txt
-# Build marker: repo-root layout for Vercel Python runtime
+flask>=3.0
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+google-genai>=1.0
