@@ -15,6 +15,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, text
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///helpkart_local.db")
+# Pin the psycopg2 driver: a bare "postgresql://" URL makes SQLAlchemy 2.x pick
+# psycopg3, which is not installed here. Accept the older "postgres://" form too.
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len("postgresql://"):]
+elif DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len("postgres://"):]
 IS_POSTGRES = DATABASE_URL.startswith("postgres")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
