@@ -35,14 +35,14 @@ if (url.startsWith("pglite://")) {
       id serial PRIMARY KEY,
       name text NOT NULL,
       email text NOT NULL,
-      created_at timestamp DEFAULT now()
+      created_at timestamptz DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS orders (
       id serial PRIMARY KEY,
       customer_id integer NOT NULL,
       status text NOT NULL,
       total text,
-      created_at timestamp DEFAULT now()
+      created_at timestamptz DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS knowledge_base (
       id serial PRIMARY KEY,
@@ -52,21 +52,25 @@ if (url.startsWith("pglite://")) {
     CREATE TABLE IF NOT EXISTS conversations (
       id serial PRIMARY KEY,
       title text NOT NULL,
-      created_at timestamp DEFAULT now()
+      created_at timestamptz DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS visitors (id text PRIMARY KEY, created_at timestamptz DEFAULT now() NOT NULL);
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS visitor_id text NOT NULL DEFAULT '';
+    
     CREATE TABLE IF NOT EXISTS message_audio (
       message_id integer PRIMARY KEY,
       audio_base64 text NOT NULL,
       char_count integer NOT NULL,
-      created_at timestamp DEFAULT now()
+      created_at timestamptz DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS messages (
       id serial PRIMARY KEY,
       conversation_id integer NOT NULL,
       role text NOT NULL,
       content text NOT NULL,
-      created_at timestamp DEFAULT now()
+      created_at timestamptz DEFAULT now()
     );
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'pending';
   `);
   db = drizzle(client, { schema });
   console.log("[db] using embedded PGlite database (./.pglite)");
