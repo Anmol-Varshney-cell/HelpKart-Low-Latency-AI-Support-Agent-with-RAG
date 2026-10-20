@@ -1,8 +1,8 @@
 import { randomBytes } from "crypto";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { createServer, type Server } from "http";
-import { registerRoutes } from "./routes";
-import { storage } from "./storage";
+import { registerRoutes } from "./routes.js";
+import { storage } from "./storage.js";
 
 // Anonymous visitor identity for the public demo: the server sets an
 // HttpOnly cookie (not readable from page JS) holding an opaque random
