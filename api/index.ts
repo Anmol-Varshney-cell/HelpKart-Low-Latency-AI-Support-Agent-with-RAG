@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import { createApp } from "../server/app";
+import { createApp } from "../server/app.js";
 
 // Vercel serverless entrypoint: all /api/* requests are rewritten here
 // (see vercel.json). The Express app is created once per function instance
