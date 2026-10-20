@@ -1,1 +1,2 @@
 -r python/requirements.txt
+# Build marker: repo-root layout for Vercel Python runtime
