@@ -1,4 +1,4 @@
-import { eq, or, ilike, desc, gte } from "drizzle-orm";
+import { eq, and, or, ilike, desc, gte, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
   conversations,
@@ -11,11 +11,12 @@ import {
   type InsertConversation,
   type InsertMessage,
   type MessageAudio,
+  visitors,
 } from "../shared/schema";
 
 export interface IStorage {
   // Conversations
-  getConversations(): Promise<Conversation[]>;
+  getConversations(visitorId: string): Promise<Conversation[]>;
   getConversation(id: number): Promise<Conversation | undefined>;
   createConversation(conversation: InsertConversation): Promise<Conversation>;
   deleteConversation(id: number): Promise<void>;
@@ -36,8 +37,112 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async getConversations(): Promise<Conversation[]> {
-    return await db.select().from(conversations).orderBy(desc(conversations.createdAt));
+  async getConversations(visitorId: string): Promise<Conversation[]> {
+    return await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.visitorId, visitorId))
+      .orderBy(desc(conversations.createdAt));
+  }
+
+  // Atomically admit a question for a visitor. Runs in a transaction holding
+  // a per-visitor advisory lock in the SHARED database, so parallel serverless
+  // invocations cannot slip past the cap together, and a retry of an
+  // unanswered question always reuses the same record.
+  //
+  // Cap accounting: only 'answered' questions and still-active 'pending'
+  // (in-flight, younger than pendingSince) questions count. 'failed' and
+  // stale 'pending' (crashed/aborted invocation) questions stay visible in
+  // history but are free - the check is query-time, so no sweeper job or
+  // boot-time UPDATE is needed on any database.
+  async admitQuestion(args: {
+    visitorId: string;
+    conversationId: number;
+    text: string;
+    cap: number;
+    windowSince: Date;
+    pendingSince: Date;
+  }): Promise<{ outcome: "admitted" | "cap_reached" | "in_flight"; messageId: number }> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${args.visitorId}, 0))`);
+
+      const convoUserMsgs = await tx
+        .select({ id: messages.id, content: messages.content, status: messages.status, createdAt: messages.createdAt })
+        .from(messages)
+        .where(and(eq(messages.conversationId, args.conversationId), eq(messages.role, "user")))
+        .orderBy(desc(messages.id));
+
+      const retry = convoUserMsgs.find(
+        (m) => m.content === args.text && (m.status === "failed" || m.status === "pending")
+      );
+      if (
+        retry &&
+        retry.status === "pending" &&
+        retry.createdAt &&
+        retry.createdAt >= args.pendingSince
+      ) {
+        // Same question is actively being answered in another invocation.
+        return { outcome: "in_flight", messageId: retry.id };
+      }
+
+      let used = 0;
+      if (args.cap > 0) {
+        const rows = await tx
+          .select({ id: messages.id })
+          .from(messages)
+          .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+          .where(
+            and(
+              eq(conversations.visitorId, args.visitorId),
+              eq(messages.role, "user"),
+              gte(messages.createdAt, args.windowSince),
+              or(
+                eq(messages.status, "answered"),
+                and(eq(messages.status, "pending"), gte(messages.createdAt, args.pendingSince))
+              )
+            )
+          );
+        used = rows.length;
+      }
+
+      if (args.cap > 0 && used >= args.cap) {
+        // Rejected questions stay visible, marked failed - never silently dropped.
+        if (retry) {
+          await tx.update(messages).set({ status: "failed" }).where(eq(messages.id, retry.id));
+          return { outcome: "cap_reached", messageId: retry.id };
+        }
+        const saved = await tx
+          .insert(messages)
+          .values({ conversationId: args.conversationId, role: "user", content: args.text, status: "failed" })
+          .returning();
+        return { outcome: "cap_reached", messageId: saved[0].id };
+      }
+
+      if (retry) {
+        await tx.update(messages).set({ status: "pending" }).where(eq(messages.id, retry.id));
+        return { outcome: "admitted", messageId: retry.id };
+      }
+      const saved = await tx
+        .insert(messages)
+        .values({ conversationId: args.conversationId, role: "user", content: args.text, status: "pending" })
+        .returning();
+      return { outcome: "admitted", messageId: saved[0].id };
+    });
+  }
+
+  async setMessageStatus(id: number, status: "pending" | "answered" | "failed"): Promise<void> {
+    await db.update(messages).set({ status }).where(eq(messages.id, id));
+  }
+
+  // Server-issued visitor tokens: only tokens present in the table are
+  // honored, so a forged cookie value can never open someone's namespace.
+  async visitorTokenExists(token: string): Promise<boolean> {
+    const rows = await db.select({ id: visitors.id }).from(visitors).where(eq(visitors.id, token));
+    return rows.length > 0;
+  }
+
+  async createVisitorToken(token: string): Promise<void> {
+    await db.insert(visitors).values({ id: token }).onConflictDoNothing();
   }
 
   async getConversation(id: number): Promise<Conversation | undefined> {
