@@ -1,5 +1,5 @@
-import { db } from "./db";
-import { knowledgeBase } from "../shared/schema";
+import { db } from "./db.js";
+import { knowledgeBase } from "../shared/schema.js";
 
 // Sample HelpKart knowledge base for the RAG demo.
 // Replace with real support content before using with real customers.
