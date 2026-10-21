@@ -45,7 +45,8 @@ python/
   gemini_client.py      Gemini client + free-tier fallback chain
   static/index.html     The chat page
   .env.example          Template of the environment variables
-client/ server/ shared/ Previous TypeScript (React/Express) version, kept for reference
+client/ server/ shared/ api/, drizzle.config.ts and the root .env.example/.gitignore are the
+previous TypeScript (React/Express) version, kept for reference
 ```
 
 ## Run locally
